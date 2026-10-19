@@ -9,6 +9,7 @@
 goes to a log file named in the footer. Exit codes: 0 ok, 1 failure, 2 quota hit, 124 timeout.
 """
 import argparse
+import fnmatch
 import glob
 import json
 import os
@@ -194,7 +195,12 @@ def print_status(rows):
 # ---- importing Claude skills into subagent prompts ----
 
 CLAUDE = HOME / ".claude"
-ALWAYS_IMPORT = Path(__file__).resolve().parent.parent / "always-import.txt"
+SKILL_DIR = Path(__file__).resolve().parent.parent
+ALWAYS_IMPORT = SKILL_DIR / "always-import.txt"
+NEVER_IMPORT = SKILL_DIR / "never-import.txt"
+MODE_RE = re.compile(r"\b([A-Z][A-Z-]+) MODE ACTIVE \u2014 level: ([\w-]+)")
+SKILL_USE_RE = re.compile(r'"name":"Skill","input":\{"skill":"([^"]+)"')
+
 
 
 def plugin_paths():
@@ -226,37 +232,77 @@ def find_skill(name, plugins):
     return next((c for c in cands if c.is_file()), None)
 
 
-def always_imports(plugins):
+def config_lines(path):
     try:
-        lines = ALWAYS_IMPORT.read_text().splitlines()
+        lines = path.read_text().splitlines()
     except FileNotFoundError:
         return []
-    names = [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
+    return [l.strip() for l in lines if l.strip() and not l.lstrip().startswith("#")]
+
+
+def session_skills():
+    """[(skill, level)] the orchestrating Claude Code session is using, read from its transcript.
+
+    Hook-started modes ("PONYTAIL MODE ACTIVE — level: ultra") map to plugin:plugin with their
+    latest level; skills Claude invoked with the Skill tool come in as named.
+    """
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    paths = glob.glob(str(CLAUDE / "projects/*" / f"{sid}.jsonl")) if sid else []
+    if not paths:
+        return []
+    text = Path(paths[0]).read_text(errors="replace")
+    modes = {}
+    for m in MODE_RE.finditer(text):
+        modes[m.group(1).lower()] = m.group(2)
+    used = dict.fromkeys(SKILL_USE_RE.findall(text))
+    return [(f"{n}:{n}", lvl) for n, lvl in modes.items()] + [(n, None) for n in used]
+
+
+def wanted_skills(extra, plugins):
+    """[(name, level, required)] in import order: always-import, then this session's, then --skill."""
+    never = config_lines(NEVER_IMPORT)
+    out = []
     # Silently skip plugin skills whose plugin is disabled: turning ponytail off turns it off here too.
-    return [n for n in names if ":" not in n or n.split(":")[0] in plugins]
+    for n in config_lines(ALWAYS_IMPORT):
+        if ":" not in n or n.split(":")[0] in plugins:
+            out.append((n, None, False))
+    for n, lvl in session_skills():
+        bare = n.split(":")[-1]
+        if not any(fnmatch.fnmatch(n, g) or fnmatch.fnmatch(bare, g) for g in never):
+            out.append((n, lvl, False))
+    # --skill names are explicit, so they bypass never-import and fail loudly when missing.
+    out += [(n, None, True) for n in extra]
+    return out
 
 
-def skills_preamble(names):
-    """Bodies of the named skills, frontmatter stripped, as a block to put before the task."""
+def skills_preamble(extra):
+    """(preamble text, imported names): skill bodies, frontmatter stripped, to put before the task."""
     plugins = plugin_paths()
-    blocks, missing, seen = [], [], set()
-    for name in always_imports(plugins) + list(names):
-        if name in seen:
-            continue
-        seen.add(name)
+    wanted = wanted_skills(extra, plugins)
+    blocks, names, missing, levels = [], [], [], {}
+    for name, level, required in wanted:
         path = find_skill(name, plugins)
         if not path:
-            missing.append(name)
+            if required:
+                missing.append(name)
             continue
-        body = re.sub(r"\A---\n.*?\n---\n", "", path.read_text(), count=1, flags=re.S).strip()
-        blocks.append(f"--- skill: {name} (its referenced files are in {path.parent}) ---\n{body}")
+        if level:
+            levels[path] = level
+        if path in (p for _, p in names):
+            continue
+        names.append((name, path))
     if missing:
         raise SystemExit(f"skill not found: {', '.join(missing)} (use plugin:skill or a name under ~/.claude/skills)")
+    for name, path in names:
+        body = re.sub(r"\A---\n.*?\n---\n", "", path.read_text(), count=1, flags=re.S).strip()
+        level = f", active level: {levels[path]}" if path in levels else ""
+        blocks.append(f"--- skill: {name}{level} (its referenced files are in {path.parent}) ---\n{body}")
     if not blocks:
-        return ""
-    return ("=== Skills to follow, imported from the orchestrating Claude session. They describe how to "
+        return "", []
+    text = ("=== Skills to follow, imported from the orchestrating Claude session. They describe how to "
             "work; slash commands and Claude-specific tools they mention may not exist for you. ===\n\n"
             + "\n\n".join(blocks) + "\n\n=== End of skills. The task follows. ===\n\n")
+    return text, [n for n, _ in names]
 
 
 # ---- running ----
@@ -368,7 +414,9 @@ def usable(cli, rows):
 
 def cmd_run(a):
     prompt = sys.stdin.read() if a.prompt == "-" else a.prompt
-    prompt = ("" if a.no_import else skills_preamble(a.skill)) + prompt
+    preamble, imported = ("", []) if a.no_import else skills_preamble(a.skill)
+    prompt = preamble + prompt
+    skills_note = f" skills={','.join(imported)}" if imported else ""
     if a.cli == "auto":
         rows = status()
         order = [c for c in a.prefer.split(",") if c in CLIS]
@@ -383,7 +431,7 @@ def cmd_run(a):
         state = "ok" if e["ok"] else ("QUOTA" if e.get("quota_hit") else f"FAILED rc={e['rc']}")
         if answer:
             print(answer)
-        print(f"[{cli} {state} {e['secs']}s tokens={e['tokens']} log={e['log']}]")
+        print(f"[{cli} {state} {e['secs']}s tokens={e['tokens']}{skills_note} log={e['log']}]")
         if e["ok"]:
             return 0
         if not e.get("quota_hit"):
@@ -410,14 +458,19 @@ def selftest():
     assert build_cmd("agy", "p", False, None, None)[-1] == "p" + AGY_READ_ONLY
     vibe = build_cmd("vibe", "p", False, "x", None)
     assert vibe[-2:] == ["-p", "p"] and "--model" not in vibe and "read_file" in vibe
-    pre = skills_preamble([])
-    assert ("skill: ponytail:ponytail" in pre) == ("ponytail" in plugin_paths())
+    os.environ.pop("CLAUDE_CODE_SESSION_ID", None)  # no orchestrator: always-import only
+    pre, names = skills_preamble([])
+    assert ("ponytail:ponytail" in names) == ("ponytail" in plugin_paths())
     assert "\nname: ponytail" not in pre  # frontmatter stripped
     try:
         skills_preamble(["no-such-skill-xyz"])
-        raise AssertionError("missing skill must fail loudly")
+        raise AssertionError("missing --skill must fail loudly")
     except SystemExit:
         pass
+    text = ('"PONYTAIL MODE ACTIVE \u2014 level: full" ... "PONYTAIL MODE ACTIVE \u2014 level: ultra" '
+            '{"name":"Skill","input":{"skill":"superpowers:test-driven-development"}} ')
+    assert [(m.group(1), m.group(2)) for m in MODE_RE.finditer(text)][-1] == ("PONYTAIL", "ultra")
+    assert SKILL_USE_RE.findall(text) == ["superpowers:test-driven-development"]
     print("selftest ok")
 
 
@@ -436,7 +489,7 @@ def main():
     r.add_argument("--timeout", type=int, default=1800)
     r.add_argument("--skill", action="append", default=[],
                    help="Claude skill to import into the prompt (plugin:skill or name); repeatable")
-    r.add_argument("--no-import", action="store_true", help="skip always-import.txt and --skill")
+    r.add_argument("--no-import", action="store_true", help="send the bare prompt: no imported skills at all")
     sub.add_parser("selftest")
     a = ap.parse_args()
     if a.cmd == "status":

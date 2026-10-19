@@ -8,7 +8,8 @@ This repository packages machine-specific skills. `ai-cli-subagents` is symlinke
 
 - `ai-cli-subagents/SKILL.md`: routing, prompt shape, parallel runs and quota handling.
 - `ai-cli-subagents/scripts/delegate.py`: `status`, `run` and `selftest`; state in `~/.local/state/ai-cli-subagents/`.
-- `ai-cli-subagents/always-import.txt`: Claude skills pasted into every subagent prompt (`--skill` adds more per run).
+- `ai-cli-subagents/always-import.txt`: Claude skills pasted into every subagent prompt.
+- `ai-cli-subagents/never-import.txt`: globs for Claude-only skills that `run` never forwards from the orchestrating session's transcript.
 - `ai-cli-subagents/agents/openai.yaml`: agent-facing display name and description.
 
 `ydotool` is the Wayland desktop-control skill:

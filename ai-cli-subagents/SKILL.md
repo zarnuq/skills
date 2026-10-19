@@ -93,14 +93,13 @@ REPLY WITH: plain text, at most 8 lines: root cause, files changed, test result.
 
 ## Importing your skills
 
-Subagents don't load Claude's skills, plugins or hooks. `run` closes that gap by pasting skill bodies, with frontmatter stripped, ahead of the task:
+Subagents don't load Claude's skills, plugins or hooks, so `run` makes them adopt the orchestrator's skills automatically. It pastes each skill's body, with frontmatter stripped, ahead of the task, from three sources in this order:
 
-- **Always:** every skill listed in `<skill-dir>/always-import.txt`. It currently lists `ponytail:ponytail`, so subagents follow the same lazy-minimal rules as Claude. A plugin skill is skipped when its plugin is disabled in Claude Code. Edit the file to change the always-on set.
-- **Per run:** add `--skill <name>` for each skill shaping the current task, so the subagent works the same way Claude would. Use `plugin:skill` (`--skill superpowers:test-driven-development`) or a bare name under `~/.claude/skills` (`--skill kubernetes-skill`). Examples: `test-driven-development` when delegating tests or a bugfix, `systematic-debugging` when delegating a diagnosis, a domain skill such as `kubernetes-skill` or `ydotool` when the task is in that domain.
-- **Never import** skills that only make sense inside Claude Code: output styles (caveman), artifact and doc tools, Claude Code config (update-config, keybindings-help, plugin-authoring), or skills that orchestrate Claude subagents or talk to the user (brainstorming, dispatching-parallel-agents). They waste the subagent's tokens or confuse it.
-- An unknown name makes `run` fail before anything is sent, so a typo never silently drops a skill. `--no-import` sends the bare prompt, for a quick question where the rules would only add tokens.
+1. **`<skill-dir>/always-import.txt`**: imported on every run. It lists `ponytail:ponytail`. A plugin skill is skipped when its plugin is disabled in Claude Code.
+2. **This Claude session**: `run` reads the transcript at `$CLAUDE_CODE_SESSION_ID`. It imports every hook-started mode (`PONYTAIL MODE ACTIVE — level: ultra` becomes `ponytail:ponytail`, sent with its active level) and every skill Claude has invoked with the Skill tool. So if Claude loaded `superpowers:test-driven-development` or `kubernetes-skill` for this task, the subagent gets it too, with no flag needed. Skills matching a glob in `<skill-dir>/never-import.txt` are dropped: ones that only work inside Claude Code (artifacts, config, browser), or that orchestrate Claude subagents and the user (brainstorming, skill-creator, this skill).
+3. **`--skill <name>`**: adds a skill the session hasn't loaded, as `plugin:skill` or a bare name under `~/.claude/skills`. An explicit `--skill` overrides `never-import.txt`, and an unknown name fails before anything is sent.
 
-Imported text counts against the subagent's quota, not Claude's: the ponytail skill is about 1.5k tokens. Keep `--skill` to the one or two skills the task needs.
+The footer lists what was sent (`skills=ponytail:ponytail,caveman:caveman`), so check it rather than assuming. Imported text counts against the subagent's quota, not Claude's: ponytail plus caveman is about 2.5k tokens per run. Use `--no-import` for a quick question where the rules would only add tokens. To stop a skill from ever being forwarded, add it to `never-import.txt`.
 
 ## Running
 
