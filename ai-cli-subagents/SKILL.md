@@ -24,16 +24,16 @@ python3 <skill-dir>/scripts/delegate.py run codex - --cd <repo> --edit --skill s
 | CLI | Plan | Models | What limits it | Good at |
 |---|---|---|---|---|
 | `codex` | ChatGPT Plus | GPT-6.1 (`-m` to override) | 5h window + weekly window; `status` shows % used and reset times from codex's own logs. That snapshot refreshes after every codex run, and a window past its reset time counts as refilled | Code edits, bug fixes, refactors, writing and running tests, code review |
-| `agy` | Google AI Pro | `gemini-3.8-flash-{low,medium,high}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium` (`agy models`) | Per-model quotas that refill about every 5h. agy keeps no readable quota, so `status` shows what this script ran in the last 5h; a quota error starts a cooldown | Gemini Flash: fast bulk reading, summarising big files and logs, codebase sweeps. Claude Opus 4.6: hard reasoning that would otherwise burn Claude's own quota |
+| `agy` | Google AI Pro | `gemini-3.8-flash-{low,medium,high}`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`, `gpt-oss-120b-medium` (`agy models`) | Two quota groups (Gemini; Claude and GPT), each with a 5h and a weekly limit. `status` shows % left and reset times live from agy's `/quota` command (0 tokens), falling back to this script's last-5h runs if that fails; a quota error starts a cooldown | Gemini Flash: fast bulk reading, summarising big files and logs, codebase sweeps. Claude Opus 4.6: hard reasoning that would otherwise burn Claude's own quota |
 | `vibe` | Le Chat **Free** | Mistral Medium 3.5 | Tightest limits of the three; `status` shows 24h sessions, tokens and estimated cost | Small, well-scoped jobs: one-file edits, summaries, boilerplate, quick second opinions |
 
 Run `status` before fanning out several tasks, and again whenever one hits quota. The three report usage in different units, so pick like this:
 
 - **Coding, edits, tests:** codex while both its windows are under ~70% used, otherwise agy.
-- **Reading, explaining, summarising, searching:** agy. Its default model is Gemini 3.8 Flash (High) and its quotas refill every 5h. That leaves codex's weekly window for code.
+- **Reading, explaining, summarising, searching:** agy. Its default model is Gemini 3.8 Flash (High), and the Gemini group has its own 5h and weekly limits. That leaves codex's weekly window for code.
 - **Tiny, non-private jobs, or a third parallel worker:** vibe. Its free quota is the smallest, so don't give it long agentic runs.
 - **No preference, or "whichever has room":** `run auto`. Its default order is `codex,agy,vibe`; pass `--prefer` to change it.
-- When an agy model hits quota, try another model family with `--model`, e.g. `claude-sonnet-4-6`, before giving up on agy.
+- When an agy model hits quota, try the other quota group with `--model`, e.g. `claude-sonnet-4-6`, before giving up on agy.
 
 One large codex `--edit` run can use several percent of the 5h window and run past the 1800s timeout. Split big refactors into one run per module or directory.
 

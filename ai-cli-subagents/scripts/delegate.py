@@ -154,15 +154,37 @@ def agy_default_model():
         return "default"
 
 
+def agy_quota():
+    """Live quota groups from agy's /quota slash command (no model call, 0 tokens), or None."""
+    try:
+        out = subprocess.run(["agy", "-p", "/quota", "--output-format", "json"],
+                             capture_output=True, text=True, timeout=30).stdout
+        return json.loads(out)["command"]["data"]["groups"]
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def parse_agy_quota(groups):
+    return [{"group": g["name"], "windows": [
+        {"window": b["window"], "remaining_percent": round(b["remaining_fraction"] * 100, 1),
+         "resets_at": datetime.fromisoformat(b["reset_time"].replace("Z", "+00:00")).timestamp()}
+        for b in g["buckets"]]} for g in groups]
+
+
 def agy_status(ledger):
-    # agy keeps no readable quota locally, so count what this script ran in the 5h window.
+    s = {"cli": "agy", "plan": "Google AI Pro", "cooldown_until": cooldown_until("agy", ledger)}
+    groups = agy_quota()
+    if groups:
+        s["groups"] = parse_agy_quota(groups)
+        return s
+    # Fallback when /quota fails: count what this script ran in the 5h window.
     recent = [e for e in ledger if e["cli"] == "agy" and e["ts"] > now() - 5 * 3600 and e.get("tokens")]
     by_model = {}
     for e in recent:
         m = e.get("model") or agy_default_model()
         by_model[m] = by_model.get(m, 0) + e["tokens"]
-    return {"cli": "agy", "plan": "Google AI Pro", "cooldown_until": cooldown_until("agy", ledger),
-            "last_5h": {"runs": len(recent), "tokens_by_model": by_model}}
+    s["last_5h"] = {"runs": len(recent), "tokens_by_model": by_model}
+    return s
 
 
 def status():
@@ -182,6 +204,11 @@ def print_status(rows):
                 line += f"{w['window_hours']:g}h {w['used_percent']:g}% used (resets {reset}); "
             if "snapshot_age_min" in s:
                 line += f"snapshot {s['snapshot_age_min']}m old"
+        elif s["cli"] == "agy" and "groups" in s:
+            for g in s["groups"]:
+                line += f"{g['group']}: " + ", ".join(
+                    f"{w['window']} {w['remaining_percent']:g}% left (resets {fmt_time(w['resets_at'])})"
+                    for w in g["windows"]) + "; "
         elif s["cli"] == "agy":
             u = s["last_5h"]
             per_model = ", ".join(f"{m} {t}" for m, t in u["tokens_by_model"].items()) or "0"
@@ -447,6 +474,9 @@ def selftest():
     agy = '{"status":"SUCCESS","response":"hi\\n","usage":{"total_tokens":42}}'
     assert parse("agy", agy, None) == ("hi", 42)
     assert parse("agy", '{"status":"ERROR"}', None) == ("", 0)
+    q = parse_agy_quota([{"name": "Gemini Models", "buckets": [
+        {"window": "5h", "remaining_fraction": 0.9832, "reset_time": "2026-10-19T06:11:57Z"}]}])
+    assert q[0]["windows"][0]["remaining_percent"] == 98.3 and q[0]["windows"][0]["resets_at"] == 1792390317
     vibe = json.dumps([{"type": "message", "role": "user", "content": [{"type": "text", "text": "q"}]},
                        {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "a1"}]},
                        {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "a2"}]}])
