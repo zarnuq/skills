@@ -2,7 +2,16 @@
 
 ## Project Structure & Module Organization
 
-This repository packages a machine-specific Wayland desktop-control skill:
+This repository packages machine-specific skills. `ai-cli-subagents` is symlinked into `~/.claude/skills`; `ydotool` is copied there.
+
+`ai-cli-subagents` delegates work to the Codex, Antigravity (`agy`) and Mistral Vibe CLIs and tracks each subscription's quota:
+
+- `ai-cli-subagents/SKILL.md`: routing, prompt shape, parallel runs and quota handling.
+- `ai-cli-subagents/scripts/delegate.py`: `status`, `run` and `selftest`; state in `~/.local/state/ai-cli-subagents/`.
+- `ai-cli-subagents/always-import.txt`: Claude skills pasted into every subagent prompt (`--skill` adds more per run).
+- `ai-cli-subagents/agents/openai.yaml`: agent-facing display name and description.
+
+`ydotool` is the Wayland desktop-control skill:
 
 - `ydotool/SKILL.md`: skill metadata, input examples, and operational safeguards.
 - `ydotool/scripts/inspect_desktop.py`: Python diagnostics for ydotool connectivity and Reach state (read-only).
@@ -23,6 +32,8 @@ No build step or dependency installation is required; the diagnostic script uses
 - `python3 ydotool/scripts/inspect_desktop.py --help`: inspect supported arguments without connecting to desktop services.
 - `python3 ydotool/scripts/inspect_desktop.py`: report binaries, device visibility, and socket connectivity without emitting input.
 - `python3 ydotool/scripts/inspect_desktop.py --state`: read one Reach JSON snapshot.
+- `python3 ai-cli-subagents/scripts/delegate.py selftest`: offline checks of the parsers and command builders.
+- `python3 ai-cli-subagents/scripts/delegate.py status`: per-CLI quota headroom; reads local logs only.
 
 Diagnostics return status `1` when connectivity fails. Missing services or sandbox access can cause this independently of code correctness.
 
